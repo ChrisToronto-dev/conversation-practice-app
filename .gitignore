@@ -1,0 +1,24 @@
+.DS_Store
+*.log
+
+# macOS and editor files
+.idea/
+.vscode/
+
+# Dependency directories
+node_modules/
+vendor/
+
+# Build artifacts and caches
+.next/
+dist/
+build/
+*.tsbuildinfo
+
+# Environment and local database files
+.env
+.env.*
+!.env.example
+!backend/.env.example
+*.sqlite
+*.sqlite-*

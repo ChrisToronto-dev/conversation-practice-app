@@ -1,0 +1,21 @@
+<?php
+
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Route;
+
+use App\Http\Controllers\AuthController;
+
+Route::post('/auth/verify', [AuthController::class, 'verify']);
+
+use App\Http\Controllers\InterviewController;
+
+Route::middleware('master.auth')->group(function () {
+    Route::get('/contexts', [InterviewController::class, 'getContexts']);
+    Route::post('/contexts', [InterviewController::class, 'saveContexts']);
+    Route::post('/contexts/extract-pdf', [InterviewController::class, 'extractPdf']);
+    Route::post('/interviews', [InterviewController::class, 'startSession']);
+    Route::post('/interviews/{sessionId}/chat', [InterviewController::class, 'chat']);
+    Route::post('/interviews/{sessionId}/feedback', [InterviewController::class, 'feedback']);
+    Route::post('/tts', [InterviewController::class, 'tts']);
+    Route::get('/usage', [InterviewController::class, 'getUsage']);
+});
