@@ -303,6 +303,123 @@
   gap: 1.5rem;
   animation: slideUp 0.3s ease-out;
 }
+
+.progressModal {
+  max-width: min(760px, calc(100vw - 2rem));
+  max-height: 85vh;
+  overflow-y: auto;
+}
+
+.progressEmpty {
+  min-height: 120px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.6rem;
+  color: var(--text-muted);
+  text-align: center;
+  background: var(--surface-dark);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 1rem;
+}
+
+.scoreGrid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0.75rem;
+}
+
+.scoreCard {
+  background: var(--surface-dark);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 1rem;
+  display: grid;
+  gap: 0.25rem;
+}
+
+.scoreCard strong {
+  font-size: 1.7rem;
+  color: var(--accent-primary);
+  line-height: 1;
+}
+
+.scoreLabel,
+.scoreUnit {
+  color: var(--text-muted);
+  font-size: 0.78rem;
+}
+
+.progressSectionTitle {
+  font-size: 0.95rem;
+  margin-bottom: 0.6rem;
+  color: var(--text-primary);
+}
+
+.topicChips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.topicChip {
+  background: var(--surface-lighter);
+  border: 1px solid var(--border-color);
+  border-radius: 999px;
+  padding: 0.35rem 0.7rem;
+  color: var(--text-muted);
+  font-size: 0.78rem;
+}
+
+.historyList {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.historyItem {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  align-items: center;
+  background: var(--surface-dark);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 0.85rem 1rem;
+}
+
+.historyItem strong,
+.historyItem span {
+  display: block;
+}
+
+.historyItem strong {
+  color: var(--text-primary);
+  font-size: 0.9rem;
+}
+
+.historyItem span {
+  color: var(--text-muted);
+  font-size: 0.76rem;
+  margin-top: 0.2rem;
+}
+
+.historyScores {
+  display: flex;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  min-width: 140px;
+}
+
+.historyScores span {
+  background: rgba(139, 92, 246, 0.12);
+  border: 1px solid rgba(139, 92, 246, 0.25);
+  border-radius: 999px;
+  padding: 0.25rem 0.5rem;
+  color: var(--text-primary);
+  font-size: 0.74rem;
+}
 .summaryBox {
   composes: glass-panel from global;
   padding: 2rem;
@@ -380,6 +497,19 @@
   .summaryContent {
     grid-template-columns: 1fr;
     overflow: visible;
+  }
+
+  .scoreGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .historyItem {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .historyScores {
+    justify-content: flex-start;
   }
 
   .setupGrid {

@@ -113,11 +113,15 @@ class InterviewController extends Controller
 
     public function startSession(Request $request)
     {
+        $topic = InterviewContext::where('type', 'topic')->first()?->content ?? 'Free talking';
+
         $session = InterviewSession::create([
             'title' => 'Session ' . now()->format('Y-m-d H:i:s'),
+            'user_key_hash' => $this->userKeyHash($request),
+            'topic' => $topic,
         ]);
 
-        $reply = $this->callGroq([]);
+        $reply = $this->callGroq([], $session);
         ApiUsageLog::create(['type' => 'groq']);
 
         $session->logs()->create([
@@ -128,6 +132,56 @@ class InterviewController extends Controller
         return response()->json([
             'session_id' => $session->id,
             'reply' => $reply,
+        ]);
+    }
+
+    public function history(Request $request)
+    {
+        $userKeyHash = $this->userKeyHash($request);
+
+        $baseQuery = InterviewSession::query()
+            ->whereNotNull('feedback_generated_at');
+
+        if ($userKeyHash) {
+            $baseQuery->where('user_key_hash', $userKeyHash);
+        }
+
+        $averages = (clone $baseQuery)
+            ->selectRaw('AVG(fluency_score) as fluency, AVG(grammar_score) as grammar, AVG(overall_score) as overall, COUNT(*) as sessions')
+            ->first();
+
+        $sessions = (clone $baseQuery)
+            ->orderByDesc('created_at')
+            ->limit(20)
+            ->get()
+            ->map(fn (InterviewSession $session) => [
+                'id' => $session->id,
+                'title' => $session->title,
+                'topic' => $session->topic,
+                'fluency_score' => $session->fluency_score,
+                'grammar_score' => $session->grammar_score,
+                'overall_score' => $session->overall_score,
+                'feedback_generated_at' => $session->feedback_generated_at?->toIso8601String(),
+                'created_at' => $session->created_at?->toIso8601String(),
+            ]);
+
+        $topics = (clone $baseQuery)
+            ->whereNotNull('topic')
+            ->orderByDesc('created_at')
+            ->limit(12)
+            ->pluck('topic')
+            ->unique()
+            ->values();
+
+        return response()->json([
+            'averages' => [
+                'sessions' => (int) ($averages->sessions ?? 0),
+                'fluency' => $averages->fluency !== null ? round((float) $averages->fluency, 1) : null,
+                'grammar' => $averages->grammar !== null ? round((float) $averages->grammar, 1) : null,
+                'overall' => $averages->overall !== null ? round((float) $averages->overall, 1) : null,
+            ],
+            'sessions' => $sessions,
+            'recent_topics' => $topics,
         ]);
     }
 
@@ -144,7 +198,7 @@ class InterviewController extends Controller
             'content' => $request->message
         ]);
 
-        $reply = $this->callGroq($session->logs()->get());
+        $reply = $this->callGroq($session->logs()->get(), $session);
         ApiUsageLog::create(['type' => 'groq']);
 
         $session->logs()->create([
@@ -220,13 +274,25 @@ class InterviewController extends Controller
             ApiUsageLog::create(['type' => 'groq']);
             $json = $response->json();
             $feedbackText = $json['choices'][0]['message']['content'] ?? "Failed to generate feedback.";
+            $scores = $this->parseFeedbackScores($feedbackText);
+
+            $session->update([
+                'user_key_hash' => $session->user_key_hash ?: $this->userKeyHash($request),
+                'topic' => $session->topic ?: $topic,
+                'fluency_score' => $scores['fluency'],
+                'grammar_score' => $scores['grammar'],
+                'overall_score' => $scores['overall'],
+                'feedback' => $feedbackText,
+                'feedback_generated_at' => now(),
+            ]);
+
             return response()->json(['feedback' => $feedbackText]);
         }
 
         return response()->json(['error' => 'Failed to fetch feedback from AI'], 500);
     }
 
-    private function callGroq($logs)
+    private function callGroq($logs, ?InterviewSession $session = null)
     {
         $apiKey = request()->header('X-Groq-Api-Key');
         if (empty($apiKey)) {
@@ -241,12 +307,17 @@ class InterviewController extends Controller
         $topic = InterviewContext::where('type', 'topic')->first()?->content ?? 'Free talking';
         $teacherPersona = InterviewContext::where('type', 'teacher_persona')->first()?->content ?? 'Friendly & Encouraging';
         $correctionStyle = InterviewContext::where('type', 'correction_style')->first()?->content ?? 'realtime';
+        $previousTopics = $this->previousTopicsForCurrentUser($session, $topic);
+        $previousTopicsText = $previousTopics->isNotEmpty()
+            ? "Previously practiced topics for this user: " . $previousTopics->join(', ') . ". Avoid repeating these exact topics or conversation angles unless the student clearly asks for one of them first.\n"
+            : "";
 
         $systemInstruction = "You are a professional, natural English conversation teacher and friendly chat partner. Your goal is to help the user practice speaking English through natural dialogue.\n\n"
             . "Student English Level: {$englishLevel}\n"
             . "Conversation Topic/Scenario: {$topic}\n"
             . "Your Persona: {$teacherPersona}\n"
             . "Correction Style: {$correctionStyle}\n\n"
+            . $previousTopicsText
             . "INSTRUCTIONS:\n"
             . "1. Actively adopt your Persona in your speech style. If 'Friendly & Encouraging', praise the user's efforts, highlight positive aspects, and be warm. If 'Strict & Detail-oriented', pay close attention to grammar and pinpoint errors. If 'Enthusiastic', show high energy, use expressions like 'Awesome!' or 'Wow!', and be very expressive. If 'Calm & Patient', speak in a gentle, slow, and supportive manner.\n"
             . "2. Adjust your vocabulary and sentence structure to match the Student's English Level. If Beginner, use simple vocabulary, extremely basic grammar, and short, clear sentences. If Intermediate, speak naturally with standard grammar, everyday phrasal verbs, and moderate speed. If Advanced, speak like a native speaker with rich vocabulary, standard idioms, and complex thoughts.\n"
@@ -284,7 +355,7 @@ class InterviewController extends Controller
         if (count($logs) === 0) {
             $messages[] = [
                 'role' => 'user',
-                'content' => "Hello teacher, let's start our conversation practice. Please greet me first based on our selected topic: {$topic}."
+                'content' => "Hello teacher, let's start our conversation practice. Please greet me first based on our selected topic: {$topic}. If there are previously practiced topics listed in your instruction, choose a fresh angle unless I explicitly request an old topic."
             ];
         } else {
             foreach ($logs as $log) {
@@ -318,6 +389,58 @@ class InterviewController extends Controller
 
         $status = $response->status();
         return "API Error ({$status}): Please try again.";
+    }
+
+    private function userKeyHash(?Request $request = null): ?string
+    {
+        $request ??= request();
+        $key = $request->header('X-Groq-Api-Key')
+            ?: $request->header('X-Google-TTS-Key')
+            ?: env('GROQ_API_KEY')
+            ?: env('GOOGLE_TTS_API_KEY');
+
+        return $key ? hash('sha256', $key) : null;
+    }
+
+    private function previousTopicsForCurrentUser(?InterviewSession $session, string $currentTopic)
+    {
+        $userKeyHash = $session?->user_key_hash ?: $this->userKeyHash();
+
+        if (!$userKeyHash) {
+            return collect();
+        }
+
+        return InterviewSession::query()
+            ->where('user_key_hash', $userKeyHash)
+            ->whereNotNull('topic')
+            ->when($session, fn ($query) => $query->where('id', '!=', $session->id))
+            ->where('topic', '!=', $currentTopic)
+            ->orderByDesc('created_at')
+            ->limit(10)
+            ->pluck('topic')
+            ->unique()
+            ->values();
+    }
+
+    private function parseFeedbackScores(string $feedbackText): array
+    {
+        return [
+            'fluency' => $this->extractScore($feedbackText, ['유창성', 'Fluency']),
+            'grammar' => $this->extractScore($feedbackText, ['문법 정확성', 'Grammar Accuracy']),
+            'overall' => $this->extractScore($feedbackText, ['전체 점수', 'Overall']),
+        ];
+    }
+
+    private function extractScore(string $feedbackText, array $labels): ?float
+    {
+        foreach ($labels as $label) {
+            $pattern = '/(?:\*\*)?' . preg_quote($label, '/') . '(?:\*\*)?[^0-9]{0,60}([0-9]+(?:\.[0-9]+)?)\s*\/\s*10/iu';
+            if (preg_match($pattern, $feedbackText, $matches)) {
+                return min(10, max(0, (float) $matches[1]));
+            }
+        }
+
+        return null;
     }
 
     private function callGoogleTTS(string $text, string $voice = 'female'): ?array

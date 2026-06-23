@@ -7,6 +7,28 @@ import { fetchApi } from './lib/api';
 
 type AppState = 'LOGIN' | 'SETUP' | 'INTERVIEW' | 'SUMMARY';
 
+type ProgressSession = {
+  id: number;
+  title: string;
+  topic: string | null;
+  fluency_score: number | null;
+  grammar_score: number | null;
+  overall_score: number | null;
+  feedback_generated_at: string | null;
+  created_at: string | null;
+};
+
+type ProgressData = {
+  averages: {
+    sessions: number;
+    fluency: number | null;
+    grammar: number | null;
+    overall: number | null;
+  };
+  sessions: ProgressSession[];
+  recent_topics: string[];
+};
+
 function cleanTeacherResponse(rawContent: string) {
   let feedback = '';
   let response = rawContent;
@@ -184,6 +206,7 @@ export default function Home() {
   const [groqValid, setGroqValid] = useState(false);
   const [ttsValid, setTtsValid] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const [showProgress, setShowProgress] = useState(false);
 
   // Setup state (English Practice options)
   const [englishLevel, setEnglishLevel] = useState('Intermediate');
@@ -201,6 +224,8 @@ export default function Home() {
   // Summary state
   const [feedback, setFeedback] = useState('');
   const [feedbackLoading, setFeedbackLoading] = useState(false);
+  const [progress, setProgress] = useState<ProgressData | null>(null);
+  const [progressLoading, setProgressLoading] = useState(false);
   
   // Speech State
   const [isRecording, setIsRecording] = useState(false);
@@ -430,6 +455,18 @@ export default function Home() {
     }
   };
 
+  const fetchProgress = async () => {
+    setProgressLoading(true);
+    try {
+      const data = await fetchApi('/interviews/history');
+      setProgress(data);
+    } catch (e) {
+      console.error('Failed to fetch progress:', e);
+    } finally {
+      setProgressLoading(false);
+    }
+  };
+
   const verifyApiKey = async (key: string, ttsKey: string = '', silent = false) => {
     if(!silent) setLoading(true);
     try {
@@ -451,6 +488,7 @@ export default function Home() {
         setAppState('SETUP');
         loadContexts();
       }
+      fetchProgress();
       setShowSettings(false);
       if(!silent) setErrorMsg('');
     } catch (e: any) {
@@ -510,6 +548,7 @@ export default function Home() {
       setMessages([{ role: 'assistant', content: data.reply }]);
       setAppState('INTERVIEW');
       fetchUsage();
+      fetchProgress();
       
       const cleaned = cleanTeacherResponse(data.reply);
       fetchAndPlayTTS(cleaned.response);
@@ -652,6 +691,7 @@ export default function Home() {
         timeoutMs: 75_000
       });
       setFeedback(data.feedback);
+      fetchProgress();
     } catch (e: unknown) {
       setFeedback('Error: ' + (e instanceof Error ? e.message : 'Failed to generate feedback.'));
     } finally {
@@ -758,14 +798,113 @@ export default function Home() {
     );
   };
 
+  const formatScore = (score: number | null) => score === null ? '-' : score.toFixed(1);
+
+  const renderProgressModal = () => {
+    if (!showProgress) return null;
+
+    return (
+      <div className={styles.modalOverlay}>
+        <div className={`${styles.modalContent} ${styles.progressModal}`}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '1rem' }}>
+            <div>
+              <h2 className={styles.header} style={{ fontSize: '1.4rem', margin: 0, textAlign: 'left' }}>Progress</h2>
+              <p className={styles.subtitle} style={{ textAlign: 'left', marginTop: '0.25rem' }}>
+                Scores and topic memory for this API key
+              </p>
+            </div>
+            <button onClick={() => setShowProgress(false)} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer' }}>
+              <X size={24} />
+            </button>
+          </div>
+
+          {progressLoading ? (
+            <div className={styles.progressEmpty}>
+              <Loader2 className="animate-spin" size={18} />
+              Loading progress...
+            </div>
+          ) : !progress || progress.averages.sessions === 0 ? (
+            <div className={styles.progressEmpty}>
+              Finish a session and generate feedback to start tracking scores.
+            </div>
+          ) : (
+            <>
+              <div className={styles.scoreGrid}>
+                <div className={styles.scoreCard}>
+                  <span className={styles.scoreLabel}>Overall Avg</span>
+                  <strong>{formatScore(progress.averages.overall)}</strong>
+                  <span className={styles.scoreUnit}>/10</span>
+                </div>
+                <div className={styles.scoreCard}>
+                  <span className={styles.scoreLabel}>Fluency Avg</span>
+                  <strong>{formatScore(progress.averages.fluency)}</strong>
+                  <span className={styles.scoreUnit}>/10</span>
+                </div>
+                <div className={styles.scoreCard}>
+                  <span className={styles.scoreLabel}>Grammar Avg</span>
+                  <strong>{formatScore(progress.averages.grammar)}</strong>
+                  <span className={styles.scoreUnit}>/10</span>
+                </div>
+              </div>
+
+              {progress.recent_topics.length > 0 && (
+                <div>
+                  <h3 className={styles.progressSectionTitle}>Recent Topics</h3>
+                  <div className={styles.topicChips}>
+                    {progress.recent_topics.map(topicName => (
+                      <span key={topicName} className={styles.topicChip}>{topicName}</span>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              <div>
+                <h3 className={styles.progressSectionTitle}>Session History</h3>
+                <div className={styles.historyList}>
+                  {progress.sessions.map(session => (
+                    <div key={session.id} className={styles.historyItem}>
+                      <div>
+                        <strong>{session.topic || 'Untitled topic'}</strong>
+                        <span>{session.feedback_generated_at ? new Date(session.feedback_generated_at).toLocaleDateString() : 'No date'}</span>
+                      </div>
+                      <div className={styles.historyScores}>
+                        <span>O {formatScore(session.overall_score)}</span>
+                        <span>F {formatScore(session.fluency_score)}</span>
+                        <span>G {formatScore(session.grammar_score)}</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+    );
+  };
+
   if (appState === 'SETUP') {
     return (
       <main className={styles.container}>
         {renderApiKeyWidget()}
         {renderSettingsModal()}
+        {renderProgressModal()}
         <div className={styles.setupBox}>
-          <h1 className={styles.header}>LingoTutor Setup</h1>
-          <p className={styles.subtitle}>Choose your settings to customize your natural English speaking practice</p>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '1rem' }}>
+            <div>
+              <h1 className={styles.header} style={{ textAlign: 'left', marginBottom: '0.25rem' }}>LingoTutor Setup</h1>
+              <p className={styles.subtitle} style={{ textAlign: 'left' }}>Choose your settings to customize your natural English speaking practice</p>
+            </div>
+            <button
+              className={styles.btnSecondary}
+              onClick={() => {
+                setShowProgress(true);
+                fetchProgress();
+              }}
+            >
+              View Progress
+            </button>
+          </div>
           
           <div className={styles.setupGrid}>
             {/* Column 1: Level & Topic */}
@@ -929,6 +1068,7 @@ export default function Home() {
       <main className={styles.container}>
         {renderApiKeyWidget()}
         {renderSettingsModal()}
+        {renderProgressModal()}
         <div className={styles.summaryBox}>
           <h1 className={styles.header}>Session Summary</h1>
           <p className={styles.subtitle}>Review your transcript and teacher-style session feedback</p>
@@ -936,6 +1076,15 @@ export default function Home() {
           <div className={styles.summaryControls}>
             <button className={styles.btnSecondary} onClick={downloadScript} style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
               <Download size={16} /> Save Script
+            </button>
+            <button
+              className={styles.btnSecondary}
+              onClick={() => {
+                setShowProgress(true);
+                fetchProgress();
+              }}
+            >
+              View Progress
             </button>
             <button className={styles.btnPrimary} onClick={fetchFeedback} disabled={feedbackLoading}>
               {feedbackLoading ? <><Loader2 className="animate-spin" size={16} style={{display:'inline', marginRight:'6px'}}/> Analyzing...</> : 'Get Tutor Feedback'}
