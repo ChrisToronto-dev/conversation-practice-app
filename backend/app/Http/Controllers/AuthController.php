@@ -8,12 +8,12 @@ class AuthController extends Controller
 {
     public function verify(Request $request)
     {
-        $apiKey = $request->input('api_key');
-        $ttsKey = $request->input('tts_key');
+        $apiKey = trim((string) $request->input('api_key', ''));
+        $ttsKey = trim((string) $request->input('tts_key', ''));
 
         // Groq API keys typically start with 'gsk_'
-        $groqValid = $apiKey && str_starts_with($apiKey, 'gsk_');
-        $ttsValid = $ttsKey ? str_starts_with($ttsKey, 'AIza') : false;
+        $groqValid = $apiKey !== '' && str_starts_with($apiKey, 'gsk_');
+        $ttsValid = $ttsKey !== '' ? str_starts_with($ttsKey, 'AIza') : false;
 
         if ($groqValid) {
             return response()->json([

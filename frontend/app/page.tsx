@@ -469,17 +469,22 @@ export default function Home() {
 
   const verifyApiKey = async (key: string, ttsKey: string = '', silent = false) => {
     if(!silent) setLoading(true);
+    const trimmedKey = key.trim();
+    const trimmedTtsKey = ttsKey.trim();
     try {
-      localStorage.setItem('groq_api_key', key);
+      localStorage.setItem('groq_api_key', trimmedKey);
+      setApiKey(trimmedKey);
       // Save Google TTS key (even if empty — clears old value)
-      if (ttsKey) {
-        localStorage.setItem('google_tts_api_key', ttsKey);
+      if (trimmedTtsKey) {
+        localStorage.setItem('google_tts_api_key', trimmedTtsKey);
+        setGoogleTtsKey(trimmedTtsKey);
       } else {
         localStorage.removeItem('google_tts_api_key');
+        setGoogleTtsKey('');
       }
       const res = await fetchApi('/auth/verify', {
         method: 'POST',
-        body: JSON.stringify({ api_key: key, tts_key: ttsKey })
+        body: JSON.stringify({ api_key: trimmedKey, tts_key: trimmedTtsKey })
       });
       setGroqValid(res.groq_valid);
       setTtsValid(res.tts_valid);
@@ -491,8 +496,11 @@ export default function Home() {
       fetchProgress();
       setShowSettings(false);
       if(!silent) setErrorMsg('');
-    } catch (e: any) {
-      if(!silent) setErrorMsg('Invalid Groq API Key');
+    } catch (e: unknown) {
+      const message = e instanceof Error && e.message !== 'UNAUTHORIZED'
+        ? e.message
+        : 'Invalid Groq API Key. Please check that it starts with gsk_ and has no extra characters.';
+      if(!silent) setErrorMsg(message);
       localStorage.removeItem('groq_api_key');
       setGroqValid(false);
     } finally {
