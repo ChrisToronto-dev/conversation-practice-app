@@ -30,9 +30,10 @@ class InterviewController extends Controller
             'teacher_persona' => 'nullable|string',
             'correction_style' => 'nullable|string',
             'teacher_voice' => 'nullable|string',
+            'practice_focus' => 'nullable|string',
         ]);
 
-        $keys = ['resume', 'qna', 'job_posting', 'english_level', 'topic', 'teacher_persona', 'correction_style', 'teacher_voice'];
+        $keys = ['resume', 'qna', 'job_posting', 'english_level', 'topic', 'teacher_persona', 'correction_style', 'teacher_voice', 'practice_focus'];
         foreach ($keys as $key) {
             if ($request->has($key)) {
                 InterviewContext::updateOrCreate(
@@ -114,11 +115,16 @@ class InterviewController extends Controller
     public function startSession(Request $request)
     {
         $topic = InterviewContext::where('type', 'topic')->first()?->content ?? 'Free talking';
+        $englishLevel = InterviewContext::where('type', 'english_level')->first()?->content ?? 'Intermediate';
+        $practiceFocus = InterviewContext::where('type', 'practice_focus')->first()?->content ?? '';
+        $targetExpressions = $this->generateTargetExpressions($englishLevel, $topic, $practiceFocus);
 
         $session = InterviewSession::create([
             'title' => 'Session ' . now()->format('Y-m-d H:i:s'),
             'user_key_hash' => $this->userKeyHash($request),
             'topic' => $topic,
+            'practice_focus' => $practiceFocus,
+            'target_expressions' => $targetExpressions,
         ]);
 
         $reply = $this->callGroq([], $session);
@@ -132,6 +138,7 @@ class InterviewController extends Controller
         return response()->json([
             'session_id' => $session->id,
             'reply' => $reply,
+            'target_expressions' => $targetExpressions,
         ]);
     }
 
@@ -307,6 +314,13 @@ class InterviewController extends Controller
         $topic = InterviewContext::where('type', 'topic')->first()?->content ?? 'Free talking';
         $teacherPersona = InterviewContext::where('type', 'teacher_persona')->first()?->content ?? 'Friendly & Encouraging';
         $correctionStyle = InterviewContext::where('type', 'correction_style')->first()?->content ?? 'realtime';
+        $targetExpressions = collect($session?->target_expressions ?? []);
+        $targetExpressionsText = $targetExpressions->isNotEmpty()
+            ? "Today's target expressions: " . $targetExpressions
+                ->map(fn ($item) => ($item['expression'] ?? '') . " = " . ($item['meaning'] ?? '') . " / example: " . ($item['example'] ?? ''))
+                ->filter()
+                ->join('; ') . ". Use these expressions naturally during the session and encourage the student to try them.\n"
+            : "";
         $previousTopics = $this->previousTopicsForCurrentUser($session, $topic);
         $previousTopicsText = $previousTopics->isNotEmpty()
             ? "Previously practiced topics for this user: " . $previousTopics->join(', ') . ". Avoid repeating these exact topics or conversation angles unless the student clearly asks for one of them first.\n"
@@ -318,12 +332,13 @@ class InterviewController extends Controller
             . "Your Persona: {$teacherPersona}\n"
             . "Correction Style: {$correctionStyle}\n\n"
             . $previousTopicsText
+            . $targetExpressionsText
             . "INSTRUCTIONS:\n"
             . "1. Actively adopt your Persona in your speech style. If 'Friendly & Encouraging', praise the user's efforts, highlight positive aspects, and be warm. If 'Strict & Detail-oriented', pay close attention to grammar and pinpoint errors. If 'Enthusiastic', show high energy, use expressions like 'Awesome!' or 'Wow!', and be very expressive. If 'Calm & Patient', speak in a gentle, slow, and supportive manner.\n"
             . "2. Adjust your vocabulary and sentence structure to match the Student's English Level. If Beginner, use simple vocabulary, extremely basic grammar, and short, clear sentences. If Intermediate, speak naturally with standard grammar, everyday phrasal verbs, and moderate speed. If Advanced, speak like a native speaker with rich vocabulary, standard idioms, and complex thoughts.\n"
             . "3. Stick to the chosen Topic/Scenario. If it's a roleplay (e.g., ordering coffee, travel check-in), play your role naturally and guide the user through the scenario.\n"
             . "4. Sound like a real one-on-one teacher, not a quiz bot. Briefly acknowledge what the student said, naturally reuse or rephrase one useful phrase from their answer, then ask one follow-up question that helps them say a little more.\n"
-            . "5. Quietly choose 2-3 useful target expressions for this session based on the topic and the student's level. Work them into the conversation naturally. Occasionally invite the student to try one of them, but do not present a list during chat.\n"
+            . "5. If today's target expressions are provided, center the session around them. Model one expression early, ask the student to use it, and revisit the expressions naturally across the conversation. If none are provided, quietly choose 2-3 useful target expressions for this session based on the topic and level.\n"
             . "6. When the student says something important but awkward, you may ask them to try again with a natural model sentence, e.g. 'Nice idea. Try saying it this way: ... Now, can you say that again?' Use this sparingly, about once every few turns, so the conversation still feels smooth.\n"
             . "7. Keep your conversational response VERY CONCISE: usually 1-2 sentences, 3 only when a short correction or retry prompt needs context. Ask only ONE natural question at a time to keep the conversation flowing. Never write lists, bullet points, or markdown. It must be easy to read and synthesize for TTS.\n"
             . "8. Do not abruptly change topics. Remember details the student has already shared and refer back to them when it feels natural.\n"
@@ -441,6 +456,117 @@ class InterviewController extends Controller
         }
 
         return null;
+    }
+
+    private function generateTargetExpressions(string $englishLevel, string $topic, ?string $practiceFocus = null): array
+    {
+        $apiKey = request()->header('X-Groq-Api-Key') ?: env('GROQ_API_KEY');
+        $focus = trim((string) $practiceFocus);
+        $focusDescription = $focus !== '' ? $focus : $topic;
+
+        if (!$apiKey) {
+            return $this->fallbackTargetExpressions($focusDescription);
+        }
+
+        $payload = [
+            'model' => 'llama-3.3-70b-versatile',
+            'messages' => [
+                [
+                    'role' => 'system',
+                    'content' => "You create practical English speaking lesson targets. Return ONLY valid JSON. No markdown."
+                ],
+                [
+                    'role' => 'user',
+                    'content' => "Create 5 useful target expressions for an English conversation practice session.\n"
+                        . "Student level: {$englishLevel}\n"
+                        . "Main topic/scenario: {$topic}\n"
+                        . "Specific focus requested by the student: {$focusDescription}\n\n"
+                        . "Return a JSON array. Each item must have these keys: expression, meaning, example.\n"
+                        . "expression: natural English phrase or sentence pattern.\n"
+                        . "meaning: Korean meaning/explanation.\n"
+                        . "example: one short English example sentence related to the focus.\n\n"
+                        . "For example, if the focus is soccer/sports, include practical expressions like score, win/lose, who scored, match result, and close game."
+                ],
+            ],
+            'max_tokens' => 700,
+            'temperature' => 0.4,
+        ];
+
+        try {
+            $response = Http::withToken($apiKey)->timeout(30)->post("https://api.groq.com/openai/v1/chat/completions", $payload);
+
+            if (!$response->successful()) {
+                return $this->fallbackTargetExpressions($focusDescription);
+            }
+
+            ApiUsageLog::create(['type' => 'groq']);
+            $content = $response->json('choices.0.message.content') ?? '';
+            $expressions = $this->decodeTargetExpressionJson($content);
+
+            return count($expressions) > 0
+                ? array_slice($expressions, 0, 6)
+                : $this->fallbackTargetExpressions($focusDescription);
+        } catch (\Throwable $e) {
+            \Illuminate\Support\Facades\Log::warning('Failed to generate target expressions: ' . $e->getMessage());
+            return $this->fallbackTargetExpressions($focusDescription);
+        }
+    }
+
+    private function decodeTargetExpressionJson(string $content): array
+    {
+        $clean = trim($content);
+
+        if (preg_match('/```(?:json)?\s*([\s\S]*?)```/i', $clean, $matches)) {
+            $clean = trim($matches[1]);
+        }
+
+        $decoded = json_decode($clean, true);
+
+        if (!is_array($decoded)) {
+            return [];
+        }
+
+        return collect($decoded)
+            ->filter(fn ($item) => is_array($item))
+            ->map(fn ($item) => [
+                'expression' => trim((string) ($item['expression'] ?? '')),
+                'meaning' => trim((string) ($item['meaning'] ?? '')),
+                'example' => trim((string) ($item['example'] ?? '')),
+            ])
+            ->filter(fn ($item) => $item['expression'] !== '' && $item['example'] !== '')
+            ->values()
+            ->all();
+    }
+
+    private function fallbackTargetExpressions(string $focus): array
+    {
+        return [
+            [
+                'expression' => 'How did it go?',
+                'meaning' => '어떻게 됐어? / 결과가 어땠어?',
+                'example' => 'How did the game go yesterday?',
+            ],
+            [
+                'expression' => 'It was a close game.',
+                'meaning' => '박빙의 경기였어.',
+                'example' => 'It was a close game, but our team won.',
+            ],
+            [
+                'expression' => 'Who scored?',
+                'meaning' => '누가 득점했어?',
+                'example' => 'Who scored the winning goal?',
+            ],
+            [
+                'expression' => 'They won 1-0.',
+                'meaning' => '그들이 1대0으로 이겼어.',
+                'example' => 'Korea won 1-0 in the final match.',
+            ],
+            [
+                'expression' => 'I am trying to talk about ' . $focus . ' more naturally.',
+                'meaning' => '이 주제에 대해 더 자연스럽게 말해보고 싶어.',
+                'example' => 'I am trying to talk about sports more naturally.',
+            ],
+        ];
     }
 
     private function callGoogleTTS(string $text, string $voice = 'female'): ?array

@@ -10,6 +10,8 @@ class InterviewSession extends Model
         'title',
         'user_key_hash',
         'topic',
+        'practice_focus',
+        'target_expressions',
         'fluency_score',
         'grammar_score',
         'overall_score',
@@ -22,6 +24,7 @@ class InterviewSession extends Model
         'grammar_score' => 'float',
         'overall_score' => 'float',
         'feedback_generated_at' => 'datetime',
+        'target_expressions' => 'array',
     ];
 
     public function logs()

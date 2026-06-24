@@ -29,6 +29,12 @@ type ProgressData = {
   recent_topics: string[];
 };
 
+type TargetExpression = {
+  expression: string;
+  meaning: string;
+  example: string;
+};
+
 function cleanTeacherResponse(rawContent: string) {
   let feedback = '';
   let response = rawContent;
@@ -216,10 +222,12 @@ export default function Home() {
   const [correctionStyle, setCorrectionStyle] = useState('realtime');
   const [teacherVoice, setTeacherVoice] = useState('female');
   const [autoSendDelay, setAutoSendDelay] = useState(3);
+  const [practiceFocus, setPracticeFocus] = useState('');
 
   // Interview state
   const [sessionId, setSessionId] = useState<number | null>(null);
   const [messages, setMessages] = useState<{role: string, content: string}[]>([]);
+  const [targetExpressions, setTargetExpressions] = useState<TargetExpression[]>([]);
   
   // Summary state
   const [feedback, setFeedback] = useState('');
@@ -516,6 +524,7 @@ export default function Home() {
       const tp = data.find((d: any) => d.type === 'teacher_persona');
       const cs = data.find((d: any) => d.type === 'correction_style');
       const tv = data.find((d: any) => d.type === 'teacher_voice');
+      const pf = data.find((d: any) => d.type === 'practice_focus');
 
       if (el) setEnglishLevel(el.content);
       if (t) {
@@ -530,6 +539,7 @@ export default function Home() {
       if (tp) setTeacherPersona(tp.content);
       if (cs) setCorrectionStyle(cs.content);
       if (tv) setTeacherVoice(tv.content);
+      if (pf) setPracticeFocus(pf.content);
     } catch (e) {
       console.error(e);
     }
@@ -548,12 +558,14 @@ export default function Home() {
           topic: activeTopic,
           teacher_persona: teacherPersona,
           correction_style: correctionStyle,
-          teacher_voice: teacherVoice
+          teacher_voice: teacherVoice,
+          practice_focus: practiceFocus
         })
       });
       const data = await fetchApi('/interviews', { method: 'POST' });
       setSessionId(data.session_id);
       setMessages([{ role: 'assistant', content: data.reply }]);
+      setTargetExpressions(data.target_expressions || []);
       setAppState('INTERVIEW');
       fetchUsage();
       fetchProgress();
@@ -965,6 +977,20 @@ export default function Home() {
                   />
                 )}
               </div>
+
+              {/* Practice Focus */}
+              <div className={styles.inputGroup} style={{ marginTop: '1rem' }}>
+                <label>Practice Focus (오늘 배울 표현)</label>
+                <input
+                  type="text"
+                  placeholder="e.g. soccer match results, job interview strengths, ordering coffee politely"
+                  value={practiceFocus}
+                  onChange={e => setPracticeFocus(e.target.value)}
+                />
+                <p style={{ fontSize: '0.75rem', opacity: 0.5, marginTop: '0.25rem' }}>
+                  Add a specific focus so the tutor prepares useful expressions before the session.
+                </p>
+              </div>
               
               {/* Teacher Voice */}
               <div className={styles.inputGroup} style={{ marginTop: '1rem' }}>
@@ -1211,6 +1237,26 @@ export default function Home() {
             <button className={styles.btnSecondary} onClick={endSession}>End Session</button>
           </div>
         </div>
+
+        {targetExpressions.length > 0 && (
+          <div className={styles.targetExpressionsPanel}>
+            <div className={styles.targetExpressionsHeader}>
+              <div>
+                <h2>Today's Expressions</h2>
+                <p>{practiceFocus || (topic === 'Custom' ? customTopic : topic)}</p>
+              </div>
+            </div>
+            <div className={styles.targetExpressionGrid}>
+              {targetExpressions.map((item, index) => (
+                <div key={`${item.expression}-${index}`} className={styles.targetExpressionCard}>
+                  <strong>{item.expression}</strong>
+                  <span>{item.meaning}</span>
+                  <p>{item.example}</p>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
         
         <div className={styles.chatArea}>
           {messages.map((msg, i) => {
