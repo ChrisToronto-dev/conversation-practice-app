@@ -37,10 +37,11 @@ type TargetExpression = {
 
 function cleanTeacherResponse(rawContent: string) {
   let feedback = '';
-  let response = rawContent;
+  let response = rawContent.trim();
 
-  const feedbackMatch = rawContent.match(/^Feedback:\s*([\s\S]*?)\n+Response:\s*([\s\S]*)$/i);
-  const responseOnlyMatch = rawContent.match(/^Response:\s*([\s\S]*)$/i);
+  const normalizedContent = rawContent.trim();
+  const feedbackMatch = normalizedContent.match(/^Feedback\s*:\s*([\s\S]*?)\n+Response\s*:\s*([\s\S]*)$/i);
+  const responseOnlyMatch = normalizedContent.match(/^Response\s*:\s*([\s\S]*)$/i);
 
   if (feedbackMatch) {
     feedback = feedbackMatch[1].trim();
@@ -50,6 +51,10 @@ function cleanTeacherResponse(rawContent: string) {
   }
 
   return { feedback, response };
+}
+
+function buildTeacherSpeechText(feedback: string, response: string) {
+  return response;
 }
 
 function MarkdownRenderer({ text }: { text: string }) {
@@ -211,6 +216,7 @@ export default function Home() {
   // Key Validity State
   const [groqValid, setGroqValid] = useState(false);
   const [ttsValid, setTtsValid] = useState(false);
+  const [ttsVerificationMessage, setTtsVerificationMessage] = useState('');
   const [showSettings, setShowSettings] = useState(false);
   const [showProgress, setShowProgress] = useState(false);
 
@@ -282,7 +288,7 @@ export default function Home() {
   }, [messages]);
 
   // Function to play base64 audio (MP3 or WAV)
-  const playAudioBase64 = async (audioBase64: string, mimeType: string = 'audio/mpeg') => {
+  const playAudioBase64 = async (audioBase64: string, mimeType: string = 'audio/mpeg', autoStartMic = true) => {
     if (isMutedRef.current) return;
     // Stop previous audio
     if (audioRef.current) {
@@ -302,7 +308,7 @@ export default function Home() {
         setIsSpeaking(false);
         URL.revokeObjectURL(url);
         // Signal auto-start mic (handled in useEffect to access latest state)
-        if (!isMutedRef.current) setPendingMicStart(true);
+        if (autoStartMic && !isMutedRef.current) setPendingMicStart(true);
       };
       audio.onerror = () => setIsSpeaking(false);
       await audio.play();
@@ -344,6 +350,41 @@ export default function Home() {
     } catch (e: any) {
       console.warn('Google TTS failed, using browser TTS fallback:', e.message);
       speakWithBrowserTTS(text); // Seamless fallback — conversation continues
+    } finally {
+      setIsLoadingAudio(false);
+    }
+  };
+
+  const testGoogleTTS = async () => {
+    if (!googleTtsKey.trim()) {
+      setTtsVerificationMessage('Add a Google TTS key first.');
+      return;
+    }
+
+    setIsLoadingAudio(true);
+    setTtsError(false);
+    setTtsVerificationMessage('Testing Google TTS voice...');
+
+    try {
+      const data = await fetchApi('/tts', {
+        method: 'POST',
+        body: JSON.stringify({
+          text: 'Google TTS is working. You will hear the natural teacher voice.',
+          voice: teacherVoice
+        }),
+      });
+
+      if (!data.audio_base64) {
+        throw new Error('No audio returned from Google TTS.');
+      }
+
+      setTtsValid(true);
+      setTtsVerificationMessage('Google TTS verified. Natural voice is ready.');
+      await playAudioBase64(data.audio_base64, data.mime_type ?? 'audio/mpeg', false);
+    } catch (e: unknown) {
+      setTtsValid(false);
+      setTtsError(true);
+      setTtsVerificationMessage(e instanceof Error ? e.message : 'Google TTS test failed.');
     } finally {
       setIsLoadingAudio(false);
     }
@@ -496,6 +537,13 @@ export default function Home() {
       });
       setGroqValid(res.groq_valid);
       setTtsValid(res.tts_valid);
+      if (trimmedTtsKey) {
+        setTtsVerificationMessage(res.tts_valid
+          ? 'Google TTS verified. Natural voice is ready.'
+          : (res.tts_error || 'Google TTS key was saved, but voice verification failed.'));
+      } else {
+        setTtsVerificationMessage('No Google TTS key. Browser fallback voice will be used.');
+      }
 
       if (appState === 'LOGIN') {
         setAppState('SETUP');
@@ -663,7 +711,7 @@ export default function Home() {
       if (data.audio_base64) {
         playAudioBase64(data.audio_base64);
       } else {
-        fetchAndPlayTTS(cleaned.response);
+        fetchAndPlayTTS(buildTeacherSpeechText(cleaned.feedback, cleaned.response));
       }
     } catch(e: any) {
       alert("Error: " + e.message);
@@ -1012,6 +1060,27 @@ export default function Home() {
                   ))}
                 </div>
               </div>
+
+              <div className={styles.ttsCheckCard}>
+                <div className={styles.ttsCheckHeader}>
+                  <span className={`${styles.statusDot} ${ttsValid ? styles.valid : styles.invalid}`}></span>
+                  <div>
+                    <strong>{ttsValid ? 'Google TTS Ready' : 'Google TTS Not Verified'}</strong>
+                    <p>
+                      {ttsVerificationMessage || (googleTtsKey ? 'Save & Verify your key, then test the voice.' : 'Add a Google TTS key to avoid browser fallback voice.')}
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  className={styles.btnSecondary}
+                  onClick={testGoogleTTS}
+                  disabled={!groqValid || !googleTtsKey.trim() || isLoadingAudio}
+                  style={{ width: '100%' }}
+                >
+                  {isLoadingAudio ? 'Testing Voice...' : 'Test Google Voice'}
+                </button>
+              </div>
             </div>
 
             {/* Column 2: Persona & Style */}
@@ -1045,9 +1114,9 @@ export default function Home() {
                 <label>Correction Style (교정 방식)</label>
                 <div className={styles.styleGrid}>
                   {[
-                    { val: 'realtime', label: '💡 Real-time (매 대화마다 교정)' },
-                    { val: 'flow', label: '🌊 Flow Focus (대화 흐름 유지)' },
-                    { val: 'end', label: '📝 End of Session (종료 후 교정)' }
+                    { val: 'realtime', label: '💡 Real-time (중요 오류 바로 교정)' },
+                    { val: 'flow', label: '🌊 Flow Focus (영어로 자연스럽게 바꿔 말하기)' },
+                    { val: 'end', label: '📝 End Only (종료 후 한 번에 교정)' }
                   ].map(s => (
                     <button
                       key={s.val}

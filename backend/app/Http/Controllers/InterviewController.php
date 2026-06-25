@@ -313,7 +313,7 @@ class InterviewController extends Controller
         $englishLevel = InterviewContext::where('type', 'english_level')->first()?->content ?? 'Intermediate';
         $topic = InterviewContext::where('type', 'topic')->first()?->content ?? 'Free talking';
         $teacherPersona = InterviewContext::where('type', 'teacher_persona')->first()?->content ?? 'Friendly & Encouraging';
-        $correctionStyle = InterviewContext::where('type', 'correction_style')->first()?->content ?? 'realtime';
+        $correctionStyle = trim(InterviewContext::where('type', 'correction_style')->first()?->content ?? 'realtime');
         $targetExpressions = collect($session?->target_expressions ?? []);
         $targetExpressionsText = $targetExpressions->isNotEmpty()
             ? "Today's target expressions: " . $targetExpressions
@@ -346,17 +346,24 @@ class InterviewController extends Controller
             . "CORRECTION RULE:\n";
 
         if ($correctionStyle === 'realtime') {
-            $systemInstruction .= "If the student's message has an important grammatical error, spelling issue, or unnatural phrase that affects meaning or is very useful to fix, prepend your response with a feedback section starting with 'Feedback: ' followed by a brief, friendly correction and explanation in Korean.\n"
-                . "Do NOT correct every small issue. Ignore minor imperfections when correcting them would interrupt the conversation. Prioritize high-frequency mistakes, tense errors, missing articles/prepositions, word choice problems, and sentences the student is likely to reuse.\n"
-                . "Then, start a new line and write 'Response: ' followed by your natural English conversational response.\n"
-                . "Example format with correction:\n"
-                . "Feedback: \"I go to market yesterday\"는 과거형인 \"I went to the market yesterday\"로 쓰는 것이 자연스럽습니다. 과거 시제에 주의해 보세요!\n"
-                . "Response: That sounds like a fun day! What did you buy at the market?\n\n"
-                . "If the student's sentence is correct enough for smooth conversation, DO NOT include the 'Feedback:' line. Simply start with 'Response: ' followed by your conversational response.\n"
-                . "Example format when correct:\n"
-                . "Response: That sounds like a fun day! What did you buy at the market?";
+            $systemInstruction .= "This correction rule OVERRIDES your friendly persona and flow instructions.\n"
+                . "For EVERY non-empty student answer, you MUST prepend a feedback section starting exactly with 'Feedback: '. Never skip the Feedback section in realtime mode.\n"
+                . "For the student's FIRST answer in the session, you MUST correct exactly 2 high-value sentence/phrase issues before responding. For later answers, correct exactly 2 issues when possible; if there is only one real issue, give 1 correction plus 1 natural upgrade suggestion.\n"
+                . "Each correction must include: (a) the student's wrong or awkward phrase, (b) a natural corrected English version, and (c) a brief Korean explanation. Keep the feedback concise.\n"
+                . "The Korean explanation MUST be written only in Korean. Do not use Japanese, Chinese, Spanish, or mixed-language words. English is allowed only for the quoted wrong/corrected phrases.\n"
+                . "Prioritize repeated/high-frequency mistakes, tense errors, missing articles/prepositions, word choice problems, pronunciation-transcription mistakes, and meaning-changing errors.\n"
+                . "Then, start a new line and write 'Response: ' followed by your natural English spoken tutor response. The Response must be entirely in English and should naturally include ONE corrected version in a conversational way, such as 'You could say...' or 'I'd say it like this...'. Do not repeat multiple correction phrases in the Response. Do not read or translate the Korean Feedback in the Response.\n"
+                . "Required format:\n"
+                . "Feedback: 1. \"I don't have any happy/hubby\" -> \"I don't really have any hobbies.\" hobby는 취미라는 뜻이고, 복수로 말할 때는 hobbies를 씁니다.\n"
+                . "2. \"make it the time useful\" -> \"make my free time useful.\" time 앞에는 the보다 my free time이 자연스럽습니다.\n"
+                . "Response: I see what you mean. You could say, \"I don't really have any hobbies, but I try to make my free time useful.\" What do you usually do to make your free time feel valuable?";
+        } elseif ($correctionStyle === 'flow') {
+            $systemInstruction .= "Prioritize conversation flow. Do NOT prepend a Korean 'Feedback:' section. If the student's sentence is awkward but understandable, naturally recast it once inside your English response, then continue the conversation.\n"
+                . "Example:\n"
+                . "Response: Nice, you could say, 'I watched the match last night.' What was the most exciting moment?\n\n"
+                . "Only correct if the mistake blocks meaning or the target expression is being practiced. Always start with 'Response: '.";
         } else {
-            $systemInstruction .= "Do NOT include any grammatical corrections in your chat responses. Keep the conversation 100% natural. Always format your output starting with 'Response: ' followed by your response.\n"
+            $systemInstruction .= "End-of-session correction mode. Do NOT correct grammar or phrasing during chat. Do NOT recast the student's sentence. Keep the conversation 100% natural and save all corrections for the final feedback report. Always format your output starting with 'Response: ' followed by your response.\n"
                 . "Example format:\n"
                 . "Response: That sounds like a fun day! What did you buy at the market?";
         }
@@ -399,11 +406,48 @@ class InterviewController extends Controller
 
         if ($response->successful()) {
             $json = $response->json();
-            return $json['choices'][0]['message']['content'] ?? "Failed to generate text.";
+            $content = $json['choices'][0]['message']['content'] ?? "Failed to generate text.";
+
+            return $correctionStyle === 'realtime'
+                ? $this->ensureRealtimeCorrectionInResponse($content)
+                : $content;
         }
 
         $status = $response->status();
         return "API Error ({$status}): Please try again.";
+    }
+
+    private function ensureRealtimeCorrectionInResponse(string $content): string
+    {
+        if (!preg_match('/^Feedback\s*:\s*([\s\S]*?)\n+Response\s*:\s*([\s\S]*)$/i', trim($content), $sections)) {
+            return $content;
+        }
+
+        $feedback = trim($sections[1]);
+        $response = trim($sections[2]);
+        $corrected = null;
+
+        if (preg_match('/\b(a more natural way|you can say|you could say|i would say|i\'d say|try saying)\b/i', $response)) {
+            return $content;
+        }
+
+        if (preg_match('/(?:->|→)\s*[“"]([^”"]+)[”"]/u', $feedback, $matches)) {
+            $corrected = trim($matches[1]);
+        } elseif (preg_match('/(?:->|→)\s*([^\n.]+[.?!])/u', $feedback, $matches)) {
+            $corrected = trim($matches[1]);
+        }
+
+        if (!$corrected || str_contains(strtolower($response), strtolower($corrected))) {
+            return $content;
+        }
+
+        $corrected = trim($corrected);
+        $spokenCorrection = preg_match('/[.?!]$/', $corrected)
+            ? "You could say, \"{$corrected}\""
+            : "You could say, \"{$corrected}.\"";
+        $response = $spokenCorrection . ' ' . $response;
+
+        return "Feedback: {$feedback}\nResponse: {$response}";
     }
 
     private function userKeyHash(?Request $request = null): ?string

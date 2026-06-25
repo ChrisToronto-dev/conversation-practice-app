@@ -189,6 +189,34 @@
   animation: fadeIn 0.5s infinite alternate;
 }
 
+.ttsCheckCard {
+  background: var(--surface-dark);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 1rem;
+  display: grid;
+  gap: 0.85rem;
+}
+
+.ttsCheckHeader {
+  display: flex;
+  gap: 0.75rem;
+  align-items: flex-start;
+}
+
+.ttsCheckHeader strong {
+  display: block;
+  color: var(--text-primary);
+  font-size: 0.9rem;
+  margin-bottom: 0.25rem;
+}
+
+.ttsCheckHeader p {
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  line-height: 1.4;
+}
+
 .targetExpressionsPanel {
   background: var(--surface-dark);
   border: 1px solid var(--border-color);
